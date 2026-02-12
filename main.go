@@ -8,25 +8,26 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 var (
-	serverlist string
-	host       string
-	output     string
-	delay      int
-	cidr       string
+	ServerList string
+	Host       string
+	Delay      int
+	Thread     int
+	Cidr       string
 )
 
 func init() {
-	flag.StringVar(&serverlist, "input", "", "A list of DNS servers (IPv4 & DoH)")
-	flag.StringVar(&cidr, "cidr", "", "A CIDR range")
-	flag.StringVar(&host, "host", "google.com", "A hostname for using in resolve test")
-	flag.IntVar(&delay, "delay", 50, "delay beetwen each ip check")
-	flag.StringVar(&output, "output", "output.txt", "A file to write results to")
+	flag.StringVar(&ServerList, "input", "input.txt", "A list of DNS servers (IPv4 & DoH)")
+	flag.StringVar(&Cidr, "cidr", "", "A CIDR range")
+	flag.StringVar(&Host, "host", "google.com", "A hostname for using in resolve test")
+	flag.IntVar(&Delay, "delay", 50, "Delay beetwen each ip check")
+	flag.IntVar(&Thread, "thread", 10000, "total Thread for worker")
 	flag.Parse()
 	flag.Usage = func() {
 		flag.PrintDefaults()
@@ -36,30 +37,47 @@ func init() {
 
 func main() {
 	fmt.Println("[~] Starting DNSScanner ...")
-	filex, err := os.Create(output)
+
+	now := time.Now()
+	date := now.Format("2006-01-02")
+	clock := now.Format("15-04-05")
+
+	dir := filepath.Join("result", date, clock)
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		panic(err)
+	}
+
+	filePath := filepath.Join(dir, "result.txt")
+
+	file, err := os.Create(filePath)
 	if err != nil {
-		fmt.Println("[X] Error creating file", filex.Name(), ":", err)
+		fmt.Println("[X] Error creating file:", err)
 		return
 	}
-	if cidr != "" {
-		iplist, _, _ := Hosts(cidr)
-		pool := utils.New(1000)
+	defer file.Close()
+
+	if Cidr != "" {
+		ipList, _, _ := Hosts(Cidr)
+		pool := utils.New(Thread)
 		pool.Start()
 		defer pool.Stop()
-		for _, sv := range iplist {
+
+		for _, sv := range ipList {
 			pool.Submit(func() {
-				working := checkers.UDPCheck(sv, 53, host)
+				working := checkers.UDPCheck(sv, 53, Host)
 				if working {
-					filex.WriteString(strings.Join([]string{sv, ":", strconv.Itoa(53), "\n"}, ""))
+					file.WriteString(strings.Join([]string{sv, ":", strconv.Itoa(53), "\n"}, ""))
 				}
 			})
-			time.Sleep(time.Duration(delay) * time.Millisecond)
+			time.Sleep(time.Duration(Delay) * time.Millisecond)
 		}
 	}
-	if serverlist != "" {
-		svlist, err := os.Open(serverlist)
+
+	if ServerList != "" {
+		svlist, err := os.Open(ServerList)
 		if err != nil {
-			fmt.Println("[X] cant access to server list:", serverlist)
+			fmt.Println("[X] cant access to server list:", ServerList)
 			return
 		}
 		scanner := bufio.NewScanner(svlist)
@@ -79,12 +97,12 @@ func main() {
 			pool.Submit(func() {
 				fckstr := server
 				port := 53
-				working := checkers.UDPCheck(fckstr, port, host)
+				working := checkers.UDPCheck(fckstr, port, Host)
 				if working {
-					filex.WriteString(fckstr + "\n")
+					file.WriteString(fckstr + "\n")
 				}
 			})
-			time.Sleep(time.Duration(delay) * time.Millisecond)
+			time.Sleep(time.Duration(Delay) * time.Millisecond)
 		}
 	}
 }

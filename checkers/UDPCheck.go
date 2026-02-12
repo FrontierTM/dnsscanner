@@ -1,54 +1,110 @@
 package checkers
 
 import (
-	"bytes"
-	"fmt"
+	"errors"
+	"log"
+	"math/rand"
 	"net"
-	"strings"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func UDPCheck(ip string, port int, host string) bool {
-	con, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP(ip), Port: port})
-	if err != nil {
-		return false
-	}
-	defer con.Close()
-	request := buildRequest(host)
-	_, err = con.Write(request)
-	if err != nil {
-		return false
-	}
-	defer con.Close()
-	response := make([]byte, 1024)
-	err = con.SetReadDeadline(time.Now().Add(10 * time.Second))
-	if err != nil {
-		return false
-	}
-	defer con.Close()
-	read, _, err := con.ReadFromUDP(response)
-	if err != nil {
-		return false
-	}
-	defer con.Close()
-	//fmt.Printf("[+] DNS %s:%d response with %s\n", ip, port, net.IP(response[(read-4):read]))
-	fmt.Println("[+] DNS " + con.RemoteAddr().String() + " response with " + net.IP(response[(read-4):read]).To4().String())
-	return true
-}
+	startTime := time.Now()
 
-func buildRequest(host string) []byte {
-	var buf = bytes.Buffer{}
-	var prebytes = []byte{0x00, 0x02, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	buf.Write(prebytes)
-	splittedHost := strings.Split(host, ".")
-	for _, part := range splittedHost {
-		buf.WriteByte(byte(len(part)))
-		buf.WriteString(part)
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return false
 	}
-	buf.WriteByte(0x00)
-	buf.WriteByte(0x00)
-	buf.WriteByte(0x01)
-	buf.WriteByte(0x00)
-	buf.WriteByte(0x01)
-	return buf.Bytes()
+
+	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{
+		IP:   parsedIP,
+		Port: port,
+	})
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	name, err := dnsmessage.NewName(host + ".")
+	if err != nil {
+		return false
+	}
+	question := dnsmessage.Question{
+		Name:  name,
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}
+
+	id := uint16(rand.Intn(65536))
+	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{
+		ID:               id,
+		RecursionDesired: true,
+	})
+	builder.EnableCompression()
+
+	if err := builder.StartQuestions(); err != nil {
+		return false
+	}
+	if err := builder.Question(question); err != nil {
+		return false
+	}
+
+	msg, err := builder.Finish()
+	if err != nil {
+		return false
+	}
+
+	if _, err := conn.Write(msg); err != nil {
+		return false
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return false
+	}
+
+	buffer := make([]byte, 1500)
+	n, _, err := conn.ReadFromUDP(buffer)
+	if err != nil {
+		return false
+	}
+
+	var parser dnsmessage.Parser
+	respHeader, err := parser.Start(buffer[:n])
+	if err != nil {
+		return false
+	}
+
+	if respHeader.ID != id || !respHeader.Response {
+		return false
+	}
+
+	if err := parser.SkipAllQuestions(); err != nil {
+		return false
+	}
+
+	for {
+		answer, err := parser.Answer()
+		if errors.Is(err, dnsmessage.ErrSectionDone) {
+			break
+		}
+		if err != nil {
+			return false
+		}
+
+		if answer.Header.Type == dnsmessage.TypeA {
+			if a, ok := answer.Body.(*dnsmessage.AResource); ok {
+				ip := net.IP(a.A[:]).String()
+				log.Printf("[+] DNS %s response with %s | %dms",
+					conn.RemoteAddr(),
+					ip,
+					time.Since(startTime).Milliseconds(),
+				)
+				return true
+			}
+		}
+	}
+
+	return false
 }
