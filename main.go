@@ -23,7 +23,7 @@ var (
 )
 
 func init() {
-	flag.StringVar(&ServerList, "input", "input.txt", "A list of DNS servers (IPv4 & DoH)")
+	flag.StringVar(&ServerList, "input", "input_doh.txt", "A list of DNS servers (IPv4 & DoH)")
 	flag.StringVar(&Cidr, "cidr", "", "A CIDR range")
 	flag.StringVar(&Host, "host", "google.com", "A hostname for using in resolve test")
 	flag.IntVar(&Delay, "delay", 50, "Delay beetwen each ip check")
@@ -87,10 +87,13 @@ func main() {
 			if strings.HasPrefix(server, "https") {
 				pool.Submit(func() {
 					checkers.DOHCheck(Host, server)
-					file.WriteString(server)
-
 				})
 				continue
+			}
+			if strings.HasPrefix(server, "sdns") {
+				pool.Submit(func() {
+					checkers.SDNCheck(Host, server)
+				})
 			}
 			if strings.Contains(server, ":") {
 				// IPv6
