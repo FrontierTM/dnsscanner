@@ -57,16 +57,16 @@ func main() {
 	}
 	defer file.Close()
 
+	pool := utils.New(Thread)
+	pool.Start()
+	defer pool.Stop()
+
 	if Cidr != "" {
 		ipList, _, _ := Hosts(Cidr)
-		pool := utils.New(Thread)
-		pool.Start()
-		defer pool.Stop()
 
 		for _, sv := range ipList {
 			pool.Submit(func() {
-				working := checkers.UDPCheck(sv, 53, Host)
-				if working {
+				if checkers.UDPCheck(sv, 53, Host) {
 					file.WriteString(strings.Join([]string{sv, ":", strconv.Itoa(53), "\n"}, ""))
 				}
 			})
@@ -81,13 +81,15 @@ func main() {
 			return
 		}
 		scanner := bufio.NewScanner(svlist)
-		pool := utils.New(1000)
-		pool.Start()
-		defer pool.Stop()
+
 		for scanner.Scan() {
 			server := scanner.Text()
-			if strings.HasPrefix(server, "http") {
-				// do the fucking DoH (balat nistam hanooz xD)
+			if strings.HasPrefix(server, "https") {
+				pool.Submit(func() {
+					checkers.DOHCheck(Host, server)
+					file.WriteString(server)
+
+				})
 				continue
 			}
 			if strings.Contains(server, ":") {
@@ -95,11 +97,9 @@ func main() {
 				continue
 			}
 			pool.Submit(func() {
-				fckstr := server
-				port := 53
-				working := checkers.UDPCheck(fckstr, port, Host)
+				working := checkers.UDPCheck(server, 53, Host)
 				if working {
-					file.WriteString(fckstr + "\n")
+					file.WriteString(server + "\n")
 				}
 			})
 			time.Sleep(time.Duration(Delay) * time.Millisecond)
